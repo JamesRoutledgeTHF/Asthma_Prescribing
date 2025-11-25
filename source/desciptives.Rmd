@@ -1,0 +1,148 @@
+---
+title: "Descriptives"
+output: html_document
+date: "2025-11-24"
+---
+
+
+```{r cars}
+library(ggplot2)
+library(scales)
+library(lubridate)
+library(dplyr)
+
+inhaler_output <- read.csv("../inhaler_output.csv")%>%
+  select(-row_name.x) %>%
+  rename(row_name = row_name.y) %>%
+  mutate(date = as.Date(paste0(date, "-01")))
+
+formoterol_chems <- c(
+  "Beclometasone+ Formoterol",
+  "Budesonide+Formoterol",
+  "Fluticasone+Formoterol",
+  "Fluticasone + Formoterol"
+)
+
+inhaler_output <- inhaler_output %>%
+  mutate(
+    category = case_when(
+      category == "ICS+LABA" & chemical %in% formoterol_chems ~ "ICS+FORMOTEROL",
+      category == "ICS+LABA"                                   ~ "Other ICS+LABA",
+      TRUE                                                     ~ category
+    )
+  )
+
+# Items by category
+monthly_cat <- inhaler_output %>%
+  group_by(date, category) %>%
+  summarize(total_items = sum(items), .groups = 'drop')
+
+plot1 <- ggplot(monthly_cat, aes(x = date, y = total_items, group = category, colour = category)) + 
+  geom_line(size = 0.5) + 
+  geom_point() +
+  labs(title = "Prescriptions by inhaler type",
+       y = "number of prescriptions",
+       x = element_blank()) +
+  theme_classic() +
+  scale_x_date(limits = as.Date(c("2020-09-01", "2025-08-01")),
+               date_breaks = "4 months", date_labels = "%y-%m")
+
+print(plot1)
+
+# Prepare extended dataframe - monthly category by ICB rate and percent
+monthly_cat_ICB_percent <- inhaler_output %>% 
+  group_by(row_id, date, category) %>% 
+  summarize(items = sum(items), total_list_size = first(total_list_size), .groups = 'drop') %>% 
+  mutate(rate = (items / total_list_size) * 10000) %>% 
+  group_by(row_id, date) %>% 
+  mutate(total_items = sum(items)) %>% 
+  ungroup() %>%
+  mutate(percent = (items / total_items) * 100)
+
+# Rate by Category
+rate_by_category <- monthly_cat_ICB_percent %>%
+  group_by(date, category) %>%
+  summarize(rate = mean(rate), .groups = 'drop')
+
+plot_rate_category <- ggplot(rate_by_category, aes(x = date, y = rate, group = category, colour = category)) +
+  geom_line(size = 0.6) +
+  geom_point(size = 1) +
+  labs(title = "Rate of Prescriptions by Inhaler Type",
+       x = element_blank(),
+       y = "Rate per 10,000 patients") +
+  scale_x_date(limits = as.Date(c("2020-09-01", "2025-08-01")),
+               date_breaks = "6 months", date_labels = "%y-%m") +
+  theme_classic()
+
+print(plot_rate_category)
+
+# Total items monthly
+total_items_monthly <- inhaler_output %>%
+  group_by(date) %>%
+  summarize(total_items = sum(items), total_list_size = sum(total_list_size), .groups = 'drop')
+
+plot3 <- ggplot(total_items_monthly, aes(x = date, y = total_items)) +
+  geom_line(size = 0.5, color = "#2C3E50") +
+  geom_point(size = 1, color = "#2C3E50") +
+  labs(title = "Total Monthly Inhaler Prescriptions", x = "Date", y = "Total Items") +
+  scale_x_date(limits = as.Date(c("2020-09-01", "2025-08-01")),
+               date_breaks = "6 months", date_labels = "%y-%m") +
+  theme_classic() +
+  ylim(c(1500000, 2500000))
+
+
+# Percentage of combined inhaler total
+plot5_df <- monthly_cat_ICB_percent %>%
+  filter(category == "ICS+FORMOTEROL") %>% 
+  group_by(date) %>% 
+  summarise(
+    percent = mean(percent)
+  )
+
+plot5 <- ggplot(plot5_df, aes(x = date, y = percent)) +
+  geom_line(size = 0.5, color = "#2C3E50") +
+  geom_point(size = 1, color = "#2C3E50") +
+  labs(title = "ICS+FORMOTEROL Inhaler Prescriptions Monthly", x = element_blank(), y = "Percentage") +
+  scale_x_date(limits = as.Date(c("2020-09-01", "2025-08-01")),
+               date_breaks = "4 months", date_labels = "%y-%m") +
+  theme_classic() +
+  ylim(c(0,100))
+
+
+# Percentage of combined inhaler by ICB
+plot6_df <- monthly_cat_ICB_percent %>%
+  filter(category == "ICS+FORMOTEROL") %>%     
+  group_by(date, row_id) %>%
+  summarise(
+    items_sum = sum(items, na.rm = TRUE),            
+    list_size_sum = sum(total_list_size, na.rm = TRUE),
+    rate = (items_sum / list_size_sum) * 10000,
+    .groups = "drop"
+  )
+
+# Items by ICB
+plot6 <- ggplot(plot6_df, aes(x = date, y = rate, group = row_id, colour = row_id)) +
+  geom_line() +
+  #filter(category == "ICS+FORMOTEROL") %>% 
+  labs(title = "Rate by ICB", x = element_blank(), y = "Items") +
+  scale_x_date(limits = as.Date(c("2020-09-01", "2025-08-01")),
+               date_breaks = "8 months", date_labels = "%y-%m")
+
+plot7_df <- monthly_cat_ICB_percent %>%
+  filter(category == "ICS+FORMOTEROL")      
+
+plot7 <- ggplot(plot7_df, aes(x = date, y = percent, group = row_id, colour = row_id)) +
+  geom_line() +
+  #filter(category == "ICS+FORMOTEROL") %>% 
+  labs(title = "Percent by ICB", x = element_blank(), y = "Items") +
+  scale_x_date(limits = as.Date(c("2020-09-01", "2025-08-01")),
+               date_breaks = "8 months", date_labels = "%y-%m")
+
+print(plot_rate_category)
+print(plot3)
+print(plot5)
+print(plot6)
+print(plot7)
+
+```
+
