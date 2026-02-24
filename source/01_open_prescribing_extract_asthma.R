@@ -1,73 +1,179 @@
-library(openxlsx)
-library(httr)
-library(jsonlite)
 library(dplyr)
 library(readxl)
 library(writexl)
-library(ggplot2)
-library(lubridate)
-library(readr)
 
-df <- read_excel("C:/Users/James.Routledge/The Health Foundation/Data Analytics - 10-IAU/1. Work Programmes/Asthma project/BNFcodesasthma.xlsx")
-#mapping <- read_excel("GetUBetterMapping.xlsx")
+codes_df <- read_excel("C:/Users/James.Routledge/The Health Foundation/Data Analytics - 10-IAU/1. Work Programmes/Asthma project/BNFcodesasthma.xlsx")
 
-get_data_for_code <- function(BNFcode, medication, category, chemical) {
-  print(paste("Fetching data for BNF Code:", code))  
-  url <- paste0("https://openprescribing.net/api/1.0/spending_by_org/?org_type=icb&code=", code, "&format=csv")
-  response <- GET(url)
-  
-  if (status_code(response) == 200) {
-    content <- content(response, "text")
-    
-    if(nchar(content) == 0) {
-      print(paste("No data available for BNF Code:", code))
-      return(NULL)
-    }
-    
-    df <- read.csv(text = content)
-    df$medication <- medication
-    df$category <- drug_type
-    df$chemical <- descriptor
-    return(df)
-    
-  } else if (status_code(response) == 429) {
-    print(paste("Rate limit exceeded for BNF Code:", code))
-    Sys.sleep(5)  
-    return(get_data_for_code(code, medication, drug_type, descriptor)) 
-  } else {
-    print(paste("Error:", status_code(response), "for BNF Code:", code)) 
-    return(NULL)
-  }
-}
-
-# Initialise an empty list to store dataframes
+#run this code for ICB level data
 data_list <- list()
 
-# Loop through each row in the filtered dataframe
-for (i in 1:nrow(df)) {
-  code <- df$BNFcode[i]
-  medication <- df$medication[i]
-  drug_type <- df$category[i]
-  descriptor <- df$chemical[i]
+failed_codes <- c()
+
+for (i in 1:nrow(codes_df)) {
   
-  # Get data for the current code and add to the list
-  temp_df <- get_data_for_code(code, medication, drug_type, descriptor)
-  if (!is.null(df)) {
-    data_list <- append(data_list, list(temp_df))
+  code <- codes_df$BNFcode[i]
+  medication <- codes_df$medication[i]
+  category <- codes_df$category[i]
+  chemical <- codes_df$chemical[i]
+  
+  message(sprintf("Processing code %d of %d: %s", i, nrow(codes_df), code))
+  
+  url <- paste0("https://openprescribing.net/api/1.0/spending_by_org/?org_type=icb&code=", code, "&format=csv")
+  
+  temp_df <- tryCatch({
+    
+    df <- read.csv(url, stringsAsFactors = FALSE)
+    
+    if (nrow(df) > 0) {
+      df$BNFcode <- code
+      df$medication <- medication
+      df$category <- category
+      df$chemical <- chemical
+      df
+    } else {
+      message("No data returned for BNF code: ", code)
+      NULL
+    }
+    
+  }, error = function(e) {
+    message("Failed for BNF code ", code, ": ", e$message)
+    failed_codes <<- c(failed_codes, code)  
+    NULL
+  })
+  
+  if (!is.null(temp_df)) {
+    data_list[[length(data_list) + 1]] <- temp_df
+  }
+  
+  Sys.sleep(1)  
+}
+
+combined_df <- bind_rows(data_list)
+
+write_xlsx(combined_df, "Asthma_BNF_combined.xlsx")
+
+if (length(failed_codes) > 0) {
+  message("The following BNF codes failed and can be retried later: ", paste(failed_codes, collapse = ", "))
+} else {
+  message("All BNF codes processed successfully.")
+}
+
+
+
+#run this code for practice level
+
+
+codes_df <- read_excel(
+  "C:/Users/James.Routledge/The Health Foundation/Data Analytics - 10-IAU/1. Work Programmes/Asthma project/BNFcodesasthma.xlsx"
+)
+
+
+date_df <- data.frame(
+  date = seq(as.Date("2020-12-01"),
+             as.Date("2025-11-01"),
+             by = "month")
+)
+
+date_df$date <- format(date_df$date, "%Y-%m-%d")
+
+all_data <- list()
+counter <- 1
+
+failed_requests <- data.frame(
+  BNFcode = character(),
+  date = character(),
+  stringsAsFactors = FALSE
+)
+
+total_requests <- nrow(codes_df) * nrow(date_df)
+progress_counter <- 0
+
+for(i in 1:nrow(codes_df)){
+  
+  BNFcode   <- trimws(as.character(codes_df$BNFcode[i]))
+  medication <- as.character(codes_df$medication[i])
+  category   <- as.character(codes_df$category[i])
+  chemical   <- as.character(codes_df$chemical[i])
+  
+  for(date_str in date_df$date){
+    
+    progress_counter <- progress_counter + 1
+    
+    message(sprintf(
+      "Processing %d of %d | Code: %s | Date: %s",
+      progress_counter,
+      total_requests,
+      BNFcode,
+      date_str
+    ))
+    
+    url <- paste0(
+      "https://openprescribing.net/api/1.0/spending_by_org/",
+      "?org_type=practice",
+      "&code=", BNFcode,
+      "&date=", date_str,
+      "&format=csv"
+    )
+    
+    temp_df <- tryCatch({
+      
+      df <- read.csv(url, stringsAsFactors = FALSE)
+      
+      if(nrow(df) == 0) stop("No data returned")
+      
+      df[] <- lapply(df, as.character)
+      
+      df$BNFcode    <- BNFcode
+      df$date_requested <- date_str
+      df$medication <- medication
+      df$category   <- category
+      df$chemical   <- chemical
+      
+      df
+      
+    }, error = function(e) {
+      
+      message(sprintf("FAILED → Code: %s | Date: %s", BNFcode, date_str))
+      
+      failed_requests <<- rbind(
+        failed_requests,
+        data.frame(
+          BNFcode = BNFcode,
+          date = date_str,
+          stringsAsFactors = FALSE
+        )
+      )
+      
+      NULL
+    })
+    
+    if(!is.null(temp_df)){
+      all_data[[counter]] <- temp_df
+      counter <- counter + 1
+    }
+    
+    Sys.sleep(0.5)  
   }
 }
 
-# Combine all dataframes into one
-combined_df <- bind_rows(data_list)
 
-combined_df$date <- format(as.Date(combined_df$date), "%Y-%m")
+combined_df <- bind_rows(all_data)
 
-ics_size_df <- read_csv("C:/Users/James.Routledge/The Health Foundation/Data Analytics - 10-IAU/1. Work Programmes/Asthma project/ICSsize.csv")
+if("date" %in% names(combined_df)){
+  combined_df$date <- format(as.Date(combined_df$date), "%Y-%m")
+}
 
-#combined_df$date <- format(as.Date(combined_df$date), "%Y-%m")
-ics_size_df$date <- format(as.Date(ics_size_df$date), "%Y-%m")
 
-combined_df <- left_join(combined_df, ics_size_df, by = c("row_id", "date"))
+write.csv(
+  combined_df,
+  "Asthma_practice_level.csv",
+  row.names = FALSE
+)
 
-write_csv(combined_df, "inhaler_output.csv")
+write_xlsx(
+  failed_requests,
+  "Asthma_BNF_failed_requests.xlsx"
+)
 
+
+message("Finished.")
