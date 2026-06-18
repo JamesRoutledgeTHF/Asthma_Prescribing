@@ -7,8 +7,9 @@ library(writexl)
 library(ggplot2)
 library(lubridate)
 library(readr)
+library(curl)
 
-df <- read_excel("C:/Users/James.Routledge/The Health Foundation/Data Analytics - 10-IAU/1. Work Programmes/Asthma project/BNFcodesasthma.xlsx")
+df <- read_excel("BNFcodesasthma.xlsx")
 #mapping <- read_excel("GetUBetterMapping.xlsx")
 
 get_data_for_code <- function(BNFcode, medication, category, chemical) {
